@@ -9,10 +9,10 @@ int main()
 	//else
 	//	printf("Big_endian");   //Big_endian
 	//return 0;
-	 PerformanceProfiler test;
-	 PPsection* p = test.CreateSection(__FILE__, __FUNCTION__, __LINE__, "利大");
+	 //PerformanceProfiler test;
+	PPsection* p = PerformanceProfiler::GetInstance()->CreateSection(__FILE__, __FUNCTION__, __LINE__, "利大");
 	 p->Begin();
 	 Sleep(1000);
 	 p->End();
-	 test.Output();
+	 PerformanceProfiler::GetInstance()->Output();
 }

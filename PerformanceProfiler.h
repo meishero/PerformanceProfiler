@@ -2,6 +2,7 @@
 #include<iostream>
 #include<map>
 #include<windows.h>
+#include<assert.h>
 
 #include<stdarg.h>
 #include<ctime>
@@ -113,8 +114,9 @@ template<class T>   //设计单例类，用于PerformanceProfiler
 class Singleton
 {
 public:
-	T* GetInstance()
+	static T* GetInstance()
 	{
+		assert(_instance);  //饿汉模式  一定要确保此对象生成
 		return _instance;
 	}
 protected:
@@ -127,15 +129,15 @@ protected:
 	T& operator=(const T&)
 	{}
 };
+
 template<class T>
 T* Singleton<T>::_instance = new T;
 
-class PerformanceProfiler
+class PerformanceProfiler :public Singleton<PerformanceProfiler>
 {
 public:
 	typedef map<PPNode, PPsection*>  PPMAP;
-	PerformanceProfiler()
-	{}
+
 	PPsection* CreateSection(const char* filename, const char* function,
 		size_t line, const char* Desc)
 	{
@@ -176,6 +178,17 @@ public:
 	}
 protected:
 	PPMAP _ppmap;  
+protected:
+
+	//声明为友元，创建实例时父类需要调用构造函数
+	friend class Singleton<PerformanceProfiler>; 
+
+	PerformanceProfiler()
+	{}
+	PerformanceProfiler(const PerformanceProfiler&)
+	{}
+	PerformanceProfiler& operator=(const PerformanceProfiler&)
+	{}
 };
 
 
