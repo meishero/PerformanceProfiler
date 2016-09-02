@@ -1,16 +1,18 @@
 #pragma once
 #include<iostream>
 #include<map>
+#include<vector>
 #include<windows.h>
 #include<assert.h>
-
+#include<mutex>
+#include<thread>
 #include<stdarg.h>
 #include<ctime>
 
 #include<stdio.h>
 using namespace std;
 
-
+typedef long long LongType;
 static unsigned int BKDRhash(const char* key)
 {//BKDRhash函数
 	unsigned int seed = 131;
@@ -40,11 +42,13 @@ struct PPNode
 		string tmp1 = _filename;
 		tmp1 += _line;
 		tmp1 += _function;
+		tmp1 += _Desc;
 
 		string tmp2 = tmp._filename;
 		tmp2 += tmp._line;
 		tmp2 += tmp._function;
-		return (BKDRhash(tmp1.c_str()) < BKDRhash(tmp1.c_str()));
+		tmp2 += tmp._Desc;
+		return (BKDRhash(tmp1.c_str()) < BKDRhash(tmp2.c_str()));
 	}
 };
 class PPsection
@@ -56,29 +60,68 @@ public:
 		:_beginTime(0)
 		, _costTime(0)
 		, _callCount(0)
+		, _refCount(0)
 	{}
-	LongType Begin()
+	void Begin(int id)  //传入线程ID
 	{
-		_beginTime = clock();
-		return _beginTime;
+		if (id != -1)
+		{
+			_mtx.lock();
+			if (_refCountMap[id]++ == 0)
+			{
+				_beginTimeMap[id] = clock();
+			}
+			_mtx.unlock();
+		}
+		else 
+		{
+			if(_refCount++ == 0)
+				_beginTime = clock();	
+		}
+		
+		return;
 	}
-	LongType End()
+	void End(int id)
 	{
-		_costTime = clock() - _beginTime;
-		_callCount++;
-		return _beginTime;		
+		if (id != -1)
+		{
+			_mtx.lock();
+			if (--_refCountMap[id] == 0)
+			{
+				_costTimeMap[id] += clock() - _beginTimeMap[id];	
+			}
+			++_callCountMap[id];
+			_mtx.unlock();
+		}
+		else 
+		{
+			if(--_refCount == 0)
+				_costTime += clock() - _beginTime;
+			_callCount++;
+		}
+		
+		return;
 	}
 	LongType Count()
 	{
-		
-		return _callCount;
-		
+		return _callCount;	
 	}
 
 //protected:
+//private:
+	//设计多线程模式
+	map<int, LongType> _beginTimeMap; //形式为:线程号，调用次数
+	map<int, LongType> _callCountMap;
+	map<int, LongType> _costTimeMap;
+	map<int, LongType> _refCountMap;
+
+	mutex _mtx;    
+
+	//单线程
 	LongType _beginTime;
 	LongType _callCount;
 	LongType _costTime;
+	LongType _refCount; //设置引用计数，防止递归统计_beginTime的重置问题
 };
 
 
@@ -138,9 +181,12 @@ class PerformanceProfiler :public Singleton<PerformanceProfiler>
 public:
 	typedef map<PPNode, PPsection*>  PPMAP;
 
+
 	PPsection* CreateSection(const char* filename, const char* function,
 		size_t line, const char* Desc)
 	{
+		lock_guard<mutex> lock(_mtx);//RAII 锁守卫
+
 		PPNode ppnode(filename, function, line, Desc);
 		PPsection* section = NULL;
 		PPMAP::iterator it = _ppmap.find(ppnode);
@@ -162,23 +208,76 @@ public:
 	}
 	void _Output(const SaveAdapter& sa)
 	{
+		vector<PPMAP::iterator> infos;
+
 		PPMAP::iterator it = _ppmap.begin();
 		while (it != _ppmap.end())
 		{
+			PPsection* section = it->second;
+			map<int, LongType>::iterator timeIt = section->_costTimeMap.begin();
+			while (timeIt != section->_costTimeMap.end())
+			{
+				section->_costTime += timeIt->second;
+				section->_callCount += section->_callCountMap[timeIt->first];//利用线程ID
+				timeIt++;
+			}
+			infos.push_back(it);
+			it++;
+		}
+		for (int i = 0; i < infos.size(); i++)
+		{
+			it = infos[i];
 			const PPNode& details = it->first;
+			PPsection* section = it->second;
+
+			//ppNode信息
+			sa.Save("Flie: %s, Line: %d, Function:%s, Desc:%s\n",
+				details._filename.c_str(), details._line, \
+				details._function.c_str(), details._Desc.c_str());
+
+			//ppSection信息
+			map<int,LongType>::iterator timeIt = section->_costTimeMap.begin();
+
+			while (timeIt != section->_costTimeMap.end())
+			{
+				int id = timeIt->first;
+				sa.Save("ThreadId:%d, CostTime:%.2f s, CallCount:%lld\n"
+					, id
+					, (double)timeIt->second / 1000
+					, section->_callCountMap[id]);
+
+				section->_costTime += timeIt->second;
+				section->_callCount += section->_callCountMap[id];
+
+				++timeIt;
+			}
+
+
+			//总信息
+			sa.Save("TotalCostTime:%.2f s, TotalCallCount:%lld, AverCostTime:%lld ms\n\n"
+				, (double)section->_costTime / 1000
+				, section->_callCount
+				, section->_costTime / section->_callCount);
+			
+		}
+		++it;
+
+			/*const PPNode& details = it->first;
 			PPsection* section = it->second;
 			sa.Save("Flie: %s, Line: %d, Function:%s, Desc:%s\n",
 				details._filename.c_str(), details._line,\
 				details._function.c_str(), details._Desc.c_str());
 			sa.Save("BeginTime:%lld, CostTime:%lld，CallCount:%lld\n",
 				section->Begin(), section->End(), section->Count());
-			++it;
-		}
+			++it;*/
+		
 		//sa.Save();
 	}
 protected:
 	PPMAP _ppmap;  
+	mutex _mtx;
 protected:
+	
 
 	//声明为友元，创建实例时父类需要调用构造函数
 	friend class Singleton<PerformanceProfiler>; 
@@ -190,6 +289,15 @@ protected:
 	PerformanceProfiler& operator=(const PerformanceProfiler&)
 	{}
 };
+
+struct Report  //RAII 进行output()操作
+{
+	~Report()
+	{
+		PerformanceProfiler::GetInstance()->Output();
+	}
+};
+static Report report;
 
 
 
